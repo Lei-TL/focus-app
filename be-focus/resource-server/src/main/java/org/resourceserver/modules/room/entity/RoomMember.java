@@ -8,36 +8,39 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
-@Table(name = "participants")
-public class Participant {
+@Table(name = "room_members")
+public class RoomMember {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(nullable = false)
+    private Long roomId;
+
+    @Column(nullable = false)
     private String userId;
-    private String sessionId;
 
     @Enumerated(EnumType.STRING)
-    private ParticipantStatus status;
-
-    private LocalDateTime joinTime;
-    private LocalDateTime leaveTime;
-    private boolean completed;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "room_id")
-    private Room room;
+    @Column(nullable = false)
+    private Role role;
 
     @CreationTimestamp
-    private LocalDateTime createdAt;
+    @Column(updatable = false)
+    private Instant joinedAt;
 
     @UpdateTimestamp
-    private LocalDateTime updatedAt;
+    private Instant lastSeenAt;
+
+    public enum Role {
+        HOST,
+        MODERATOR,
+        MEMBER
+    }
 }

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.resourceserver.common.response.AppEvent;
+import org.resourceserver.realtime.presence.PresenceService;
 import org.resourceserver.realtime.websocket.dto.WsMessage;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -23,22 +25,35 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public class RoomWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper;
+    private final PresenceService presenceService;
 
     private final Map<Long, Set<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        String roomIdStr = getRoomId(session);
+        Map<String, String> queryParams = getQueryParams(session);
+        String roomIdStr = queryParams.get("roomId");
+        String userId = queryParams.get("userId");
+
         if (roomIdStr != null) {
             Long roomId = Long.parseLong(roomIdStr);
             roomSessions.computeIfAbsent(roomId, k -> new CopyOnWriteArraySet<>()).add(session);
-            log.info("New WebSocket connection for room {}: {}", roomId, session.getId());
+
+            if (userId != null) {
+                presenceService.markUserOnline(roomId, userId);
+                session.getAttributes().put("userId", userId);
+                session.getAttributes().put("roomId", roomIdStr);
+            }
+
+
         }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        String roomIdStr = getRoomId(session);
+        String roomIdStr = (String) session.getAttributes().get("roomId");
+        String userId = (String) session.getAttributes().get("userId");
+
         if (roomIdStr != null) {
             Long roomId = Long.parseLong(roomIdStr);
             Set<WebSocketSession> sessions = roomSessions.get(roomId);
@@ -47,6 +62,10 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
                 if (sessions.isEmpty()) {
                     roomSessions.remove(roomId);
                 }
+            }
+
+            if (userId != null) {
+                presenceService.markUserOffline(roomId, userId);
             }
         }
     }
@@ -57,6 +76,9 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
             WsMessage<Object> message = WsMessage.builder()
                     .event(event)
                     .data(data)
+                    .roomId(roomId)
+                    .timestamp(System.currentTimeMillis())
+                    .version(1)
                     .build();
 
             try {
@@ -69,16 +91,38 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
                     }
                 }
             } catch (IOException e) {
-                log.error("Error broadcasting message to room {}: {}", roomId, e.getMessage());
+                log.error("Error broadcasting message to room {}: {}", roomId, e.getMessage(), e);
             }
         }
     }
 
-    private String getRoomId(WebSocketSession session) {
+    @Scheduled(fixedRate = 15000)
+    public void sendHeartbeat() {
+        roomSessions.values().forEach(sessions -> {
+            sessions.forEach(session -> {
+                if (session.isOpen()) {
+                    try {
+                        session.sendMessage(new TextMessage("{\"event\":\"PING\"}"));
+                    } catch (IOException e) {
+                        log.warn("Failed to send heartbeat to session {}", session.getId());
+                    }
+                }
+            });
+        });
+    }
+
+    private Map<String, String> getQueryParams(WebSocketSession session) {
+        Map<String, String> queryParams = new ConcurrentHashMap<>();
         String query = session.getUri().getQuery();
-        if (query != null && query.startsWith("roomId=")) {
-            return query.split("=")[1];
+        if (query != null) {
+            String[] pairs = query.split("&");
+            for (String pair : pairs) {
+                String[] idx = pair.split("=");
+                if (idx.length > 1) {
+                    queryParams.put(idx[0], idx[1]);
+                }
+            }
         }
-        return null;
+        return queryParams;
     }
 }

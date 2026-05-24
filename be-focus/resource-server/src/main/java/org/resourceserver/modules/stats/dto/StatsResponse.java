@@ -43,6 +43,6 @@ public class StatsResponse {
     @Builder
     public static class WeeklyData {
         private List<String> labels;
-        private List<Double> values;
+        private List<Integer> values;
     }
 }

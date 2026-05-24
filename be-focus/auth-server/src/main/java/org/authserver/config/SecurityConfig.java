@@ -55,7 +55,8 @@ public class SecurityConfig {
         http.exceptionHandling((exceptions) -> exceptions
                         .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/login")))
                 .oauth2ResourceServer((resourceServer) -> resourceServer
-                        .jwt(Customizer.withDefaults()));
+                        .jwt(Customizer.withDefaults()))
+                .cors(Customizer.withDefaults());
 
         return http.build();
     }

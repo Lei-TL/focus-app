@@ -1,54 +1,80 @@
 package org.resourceserver.modules.room.mapper;
 
-import org.resourceserver.modules.room.dto.ParticipantResponse;
+import lombok.RequiredArgsConstructor;
+import org.resourceserver.modules.room.dto.RoomMemberResponse;
 import org.resourceserver.modules.room.dto.RoomResponse;
-import org.resourceserver.modules.room.entity.Participant;
-import org.resourceserver.modules.room.entity.ParticipantStatus;
+import org.resourceserver.modules.room.dto.SessionInfoResponse;
 import org.resourceserver.modules.room.entity.Room;
-import org.resourceserver.modules.session.entity.Session;
+import org.resourceserver.modules.room.entity.RoomMember;
+import org.resourceserver.modules.room.repository.RoomMemberRepository;
+import org.resourceserver.modules.session.entity.FocusSession;
+import org.resourceserver.modules.session.entity.SessionParticipant;
+import org.resourceserver.modules.session.repository.FocusSessionRepository;
+import org.resourceserver.modules.session.repository.SessionParticipantRepository;
+import org.resourceserver.modules.user.entity.User;
+import org.resourceserver.modules.user.repository.UserRepository;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
+@Component
+@RequiredArgsConstructor
 public class RoomMapper {
 
-    public static RoomResponse mapToResponse(Room room) {
-        RoomResponse.SessionInfo sessionInfo = null;
-        if (room.getCurrentSession() != null) {
-            Session session = room.getCurrentSession();
-            sessionInfo = RoomResponse.SessionInfo.builder()
-                    .id(session.getId())
-                    .remainingSeconds(session.calculateRemainingSeconds())
-                    .status(session.getStatus().name())
-                    .build();
-        }
+    private final RoomMemberRepository roomMemberRepository;
+    private final FocusSessionRepository focusSessionRepository;
+    private final SessionParticipantRepository sessionParticipantRepository;
+    private final UserRepository userRepository;
+    private final RoomMemberMapper roomMemberMapper;
+    private final FocusSessionMapper focusSessionMapper;
 
-        List<ParticipantResponse> participantResponses = room.getParticipants().stream()
-                .map(p -> ParticipantResponse.builder()
-                        .userId(p.getUserId())
-                        .status(p.getStatus().name())
-                        .joinTime(p.getJoinTime())
-                        .completed(p.isCompleted())
-                        .build())
+    public RoomResponse toRoomResponse(Room room) {
+        List<RoomMember> roomMembers = roomMemberRepository.findByRoomId(room.getId());
+        Map<String, User> userMap = userRepository.findAllById(
+                roomMembers.stream().map(RoomMember::getUserId).collect(Collectors.toList())
+        ).stream().collect(Collectors.toMap(User::getId, u -> u));
+
+        List<RoomMemberResponse> memberResponses = roomMembers.stream()
+                .map(member -> roomMemberMapper.toRoomMemberResponse(member, userMap.get(member.getUserId())))
                 .collect(Collectors.toList());
 
-        RoomResponse.ParticipantStats stats = RoomResponse.ParticipantStats.builder()
-                .focusing(room.getParticipants().stream().filter(p -> p.getStatus() == ParticipantStatus.FOCUSING).count())
-                .completed(room.getParticipants().stream().filter(p -> p.isCompleted()).count())
-                .leftEarly(room.getParticipants().stream().filter(p -> p.getStatus() == ParticipantStatus.LEFT).count())
-                .build();
+        SessionInfoResponse currentSessionResponse = null;
+        FocusSession activeSession = null;
+        if (room.getCurrentSessionId() != null) {
+            activeSession = focusSessionRepository.findById(room.getCurrentSessionId()).orElse(null);
+        }
+
+        if (activeSession != null && activeSession.getStatus() == FocusSession.SessionStatus.FOCUSING) {
+            List<SessionParticipant> sessionParticipants = sessionParticipantRepository
+                    .findBySessionId(activeSession.getId());
+            Map<String, User> sessionUserMap = userRepository.findAllById(
+                    sessionParticipants.stream().map(SessionParticipant::getUserId).collect(Collectors.toList())
+            ).stream().collect(Collectors.toMap(User::getId, u -> u));
+
+            currentSessionResponse = focusSessionMapper.toSessionInfoResponse(
+                    activeSession,
+                    sessionParticipants,
+                    sessionUserMap
+            );
+        }
 
         return RoomResponse.builder()
                 .id(room.getId())
                 .name(room.getName())
-                .duration(room.getDefaultDuration())
+                .hostUserId(room.getHostUserId())
+                .hostUsername(userMap.get(room.getHostUserId()) != null ?
+                        userMap.get(room.getHostUserId()).getUsername() : "Unknown User")
+                .visibility(room.getVisibility().name())
+                .roomType(room.getRoomType().name())
+                .defaultDurationSeconds(room.getDefaultDurationSeconds())
                 .maxParticipants(room.getMaxParticipants())
-                .currentParticipants(room.getCurrentParticipants())
-                .isPublic(room.isPublic())
-                .status(room.getStatus())
-                .session(sessionInfo)
-                .participants(participantResponses)
-                .stats(stats)
+                .currentParticipants(memberResponses.size())
+                .createdAt(room.getCreatedAt())
+                .updatedAt(room.getUpdatedAt())
+                .members(memberResponses)
+                .currentSession(currentSessionResponse)
                 .build();
     }
 }

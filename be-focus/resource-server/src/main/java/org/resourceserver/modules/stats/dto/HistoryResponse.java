@@ -21,10 +21,11 @@ public class HistoryResponse {
     @Data
     @Builder
     public static class SessionEntry {
-        private Long id;
+        private String id;
         private String title;
         private String duration;
         private int participants;
         private String date;
+        private boolean completed;
     }
 }

@@ -1,38 +1,29 @@
 package org.resourceserver.modules.room.dto;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
-import org.resourceserver.modules.room.entity.RoomStatus;
+import lombok.NoArgsConstructor;
 
+import java.time.Instant;
 import java.util.List;
 
 @Data
 @Builder
+@AllArgsConstructor
+@NoArgsConstructor
 public class RoomResponse {
     private Long id;
     private String name;
+    private String hostUserId;
+    private String hostUsername;
+    private String visibility;
+    private String roomType;
+    private int defaultDurationSeconds;
     private int maxParticipants;
     private int currentParticipants;
-    private boolean isPublic;
-    private RoomStatus status;
-    private int duration;
-    private SessionInfo session;
-    private List<ParticipantResponse> participants;
-    private ParticipantStats stats;
-
-    @Data
-    @Builder
-    public static class SessionInfo {
-        private String id;
-        private long remainingSeconds;
-        private String status;
-    }
-
-    @Data
-    @Builder
-    public static class ParticipantStats {
-        private long focusing;
-        private long completed;
-        private long leftEarly;
-    }
+    private Instant createdAt;
+    private Instant updatedAt;
+    private List<RoomMemberResponse> members;
+    private SessionInfoResponse currentSession;
 }

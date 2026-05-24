@@ -1,15 +1,17 @@
 package org.resourceserver.modules.stats.service.impl;
 
 import lombok.RequiredArgsConstructor;
-import org.resourceserver.modules.room.entity.Participant;
-import org.resourceserver.modules.room.repository.ParticipantRepository;
 import org.resourceserver.modules.stats.dto.HistoryResponse;
 import org.resourceserver.modules.stats.dto.StatsResponse;
+import org.resourceserver.modules.stats.entity.FocusRecord;
+import org.resourceserver.modules.stats.repository.FocusRecordRepository;
 import org.resourceserver.modules.stats.service.StatsService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
@@ -19,167 +21,229 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class StatsServiceImpl implements StatsService {
-    private final ParticipantRepository participantRepository;
+    private final FocusRecordRepository focusRecordRepository;
 
     @Override
     public StatsResponse getUserStats(String userId) {
-        List<Participant> allSessions = participantRepository.findByUserId(userId);
+        List<FocusRecord> records = focusRecordRepository.findByUserId(userId);
 
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime startOfWeek = now.minusDays(now.getDayOfWeek().getValue() - 1).withHour(0).withMinute(0).withSecond(0);
+        Instant now = Instant.now();
+        LocalDate today = now.atZone(ZoneId.systemDefault()).toLocalDate();
+        LocalDate startOfWeekDate = today.minusDays(today.getDayOfWeek().getValue() - 1);
+        Instant startOfWeek = startOfWeekDate.atStartOfDay(ZoneId.systemDefault()).toInstant();
 
-        long totalMinutesAllTime = 0;
-        long totalMinutesToday = 0;
-        long totalMinutesThisWeek = 0;
+        long totalSecondsAllTime = 0;
+        long totalSecondsToday = 0;
+        long totalSecondsThisWeek = 0;
 
-        for (Participant p : allSessions) {
-            long seconds = p.isCompleted() ?
-                    (p.getRoom() != null ? p.getRoom().getDefaultDuration() * 60L : 25 * 60L) :
-                    (p.getJoinTime() != null && p.getLeaveTime() != null ?
-                            java.time.Duration.between(p.getJoinTime(), p.getLeaveTime()).getSeconds() : 0);
+        for (FocusRecord record : records) {
+            long seconds = record.getDurationSeconds();
+            totalSecondsAllTime += seconds;
 
-            long mins = seconds / 60;
-            totalMinutesAllTime += mins;
-
-            if (p.getJoinTime().toLocalDate().equals(now.toLocalDate())) {
-                totalMinutesToday += mins;
+            LocalDate recordDate = record.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate();
+            if (recordDate.equals(today)) {
+                totalSecondsToday += seconds;
             }
 
-            if (p.getJoinTime().isAfter(startOfWeek)) {
-                totalMinutesThisWeek += mins;
+            if (record.getCreatedAt().isAfter(startOfWeek)) {
+                totalSecondsThisWeek += seconds;
             }
         }
 
-        String weekFocus = (totalMinutesThisWeek / 60) + "h " + (totalMinutesThisWeek % 60) + "m";
-        int streakCount = calculateStreakCount(allSessions);
+        long weekMins = totalSecondsThisWeek / 60;
+        String weekFocus = (weekMins / 60) + "h " + (weekMins % 60) + "m";
+        int streakCount = calculateStreakCount(records);
 
-        long totalCompleted = allSessions.stream().filter(Participant::isCompleted).count();
-        int activeDaysLast30 = calculateActiveDaysInLastN(allSessions, 30);
-        double avgMinsPerDay = (double) totalMinutesAllTime / Math.max(1, calculateActiveDays(allSessions));
+        long totalCompleted = records.stream().filter(FocusRecord::isCompleted).count();
+        int activeDaysLast30 = calculateActiveDaysInLastN(records, 30);
+        int totalActiveDays = calculateActiveDays(records);
+        double avgMinsPerDay = (double) (totalSecondsAllTime / 60) / Math.max(1, totalActiveDays);
 
         return StatsResponse.builder()
                 .summary(StatsResponse.Summary.builder()
                         .weekFocus(weekFocus)
-                        .streak(streakCount + (streakCount == 1 ? " day" : " days"))
-                        .sessions(String.valueOf(allSessions.size()))
-                        .averagePerDay(totalMinutesToday + "m")
+                        .streak(streakCount + " days")
+                        .sessions(String.valueOf(records.size()))
+                        .averagePerDay((totalSecondsToday / 60) + "m")
                         .build())
                 .performanceStats(Arrays.asList(
                         StatsResponse.PerformanceStat.builder()
-                                .label("Average Focus Time")
-                                .value(String.format("%.1f hours/day", avgMinsPerDay / 60.0))
-                                .subValue(String.format("%.1f hours/day", avgMinsPerDay / 60.0))
-                                .trend("↑ 12%")
+                                .label("Average Focus")
+                                .value(String.format("%.1f hrs/day", avgMinsPerDay / 60.0))
                                 .icon("time-outline")
                                 .color("#5B8DEF")
                                 .build(),
                         StatsResponse.PerformanceStat.builder()
                                 .label("Active Days")
                                 .value((int) ((activeDaysLast30 / 30.0) * 100) + "%")
-                                .subValue(activeDaysLast30 + " of last 30 days")
+                                .subValue(activeDaysLast30 + " of 30d")
                                 .icon("calendar-outline")
                                 .color("#10B981")
                                 .build(),
                         StatsResponse.PerformanceStat.builder()
-                                .label("Completion Rate")
-                                .value((int) ((double) totalCompleted / Math.max(1, allSessions.size()) * 100) + "%")
-                                .subValue(totalCompleted + " of " + allSessions.size() + " sessions")
+                                .label("Completion")
+                                .value((int) ((double) totalCompleted / Math.max(1, records.size()) * 100) + "%")
+                                .subValue(totalCompleted + " finished")
                                 .icon("checkmark-circle-outline")
                                 .color("#F59E0B")
                                 .build()
                 ))
                 .achievements(Arrays.asList(
-                        StatsResponse.Achievement.builder().label("First Step").icon("medal-outline").build(),
                         StatsResponse.Achievement.builder().label("Consistent").icon("flame-outline").build(),
-                        StatsResponse.Achievement.builder().label("Deep Work").icon("fitness-outline").build()
+                        StatsResponse.Achievement.builder().label("Focused").icon("medal-outline").build()
                 ))
                 .weeklyData(StatsResponse.WeeklyData.builder()
                         .labels(Arrays.asList("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
-                        .values(calculateWeeklyValues(allSessions, startOfWeek))
+                        .values(calculateWeeklyValues(records, startOfWeek))
                         .build())
                 .build();
     }
 
-    private int calculateStreakCount(List<Participant> sessions) {
-        if (sessions.isEmpty()) return 0;
-        return calculateActiveDays(sessions);
-    }
-
-    private int calculateActiveDays(List<Participant> sessions) {
-        return (int) sessions.stream()
-                .map(p -> p.getJoinTime().toLocalDate())
+    private int calculateStreakCount(List<FocusRecord> records) {
+        if (records.isEmpty()) return 0;
+        
+        List<LocalDate> activeDays = records.stream()
+                .map(r -> r.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate())
                 .distinct()
-                .count();
-    }
-
-    private int calculateActiveDaysInLastN(List<Participant> sessions, int n) {
-        LocalDateTime limit = LocalDateTime.now().minusDays(n);
-        return (int) sessions.stream()
-                .filter(p -> p.getJoinTime().isAfter(limit))
-                .map(p -> p.getJoinTime().toLocalDate())
-                .distinct()
-                .count();
-    }
-
-    private List<Double> calculateWeeklyValues(List<Participant> sessions, LocalDateTime startOfWeek) {
-        Double[] values = new Double[7];
-        Arrays.fill(values, 0.0);
-
-        for (Participant p : sessions) {
-            if (p.getJoinTime().isAfter(startOfWeek)) {
-                int dayIdx = p.getJoinTime().getDayOfWeek().getValue() - 1;
-                long mins = p.isCompleted() ?
-                        (p.getRoom() != null ? p.getRoom().getDefaultDuration() : 25) :
-                        java.time.Duration.between(p.getJoinTime(), p.getLeaveTime()).toMinutes();
-                values[dayIdx] += (double) mins / 60.0;
+                .sorted((a, b) -> b.compareTo(a))
+                .collect(Collectors.toList());
+        
+        if (activeDays.isEmpty()) return 0;
+        
+        LocalDate today = Instant.now().atZone(ZoneId.systemDefault()).toLocalDate();
+        LocalDate yesterday = today.minusDays(1);
+        
+        if (!activeDays.get(0).equals(today) && !activeDays.get(0).equals(yesterday)) {
+            return 0;
+        }
+        
+        int streak = 1;
+        for (int i = 1; i < activeDays.size(); i++) {
+            LocalDate previous = activeDays.get(i - 1);
+            LocalDate current = activeDays.get(i);
+            if (previous.minusDays(1).equals(current)) {
+                streak++;
+            } else {
+                break;
             }
         }
+        
+        return streak;
+    }
+
+    private int calculateActiveDays(List<FocusRecord> records) {
+        return (int) records.stream()
+                .map(r -> r.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate())
+                .distinct()
+                .count();
+    }
+
+    private int calculateActiveDaysInLastN(List<FocusRecord> records, int n) {
+        Instant limit = Instant.now().minus(java.time.Duration.ofDays(n));
+        return (int) records.stream()
+                .filter(r -> r.getCreatedAt().isAfter(limit))
+                .map(r -> r.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate())
+                .distinct()
+                .count();
+    }
+
+    private List<Integer> calculateWeeklyValues(List<FocusRecord> records, Instant startOfWeek) {
+        Integer[] values = new Integer[7];
+        Arrays.fill(values, 0);
+        System.out.println("DEBUG: calculateWeeklyValues called with startOfWeek=" + startOfWeek);
+        System.out.println("DEBUG: Number of records=" + records.size());
+
+        for (FocusRecord r : records) {
+            System.out.println("DEBUG: Record createdAt=" + r.getCreatedAt() + ", duration=" + r.getDurationSeconds() + "s");
+            if (r.getCreatedAt().isAfter(startOfWeek) || r.getCreatedAt().equals(startOfWeek)) {
+                int dayIdx = r.getCreatedAt().atZone(ZoneId.systemDefault()).getDayOfWeek().getValue() - 1;
+                int minutes = (int) Math.round((double) r.getDurationSeconds() / 60.0);
+                System.out.println("DEBUG: Adding " + minutes + " mins to dayIdx=" + dayIdx);
+                values[dayIdx] += minutes;
+            }
+        }
+        System.out.println("DEBUG: Final weekly values=" + Arrays.asList(values));
         return Arrays.asList(values);
     }
 
     @Override
     public HistoryResponse getUserHistory(String userId) {
-        List<Participant> allSessions = participantRepository.findByUserId(userId);
+        List<FocusRecord> records = focusRecordRepository.findByUserId(userId);
 
-        long totalMinutes = allSessions.stream()
-                .mapToLong(p -> {
-                    if (p.isCompleted()) {
-                        return p.getRoom() != null ? p.getRoom().getDefaultDuration() : 25;
-                    } else if (p.getJoinTime() != null && p.getLeaveTime() != null) {
-                        return java.time.Duration.between(p.getJoinTime(), p.getLeaveTime()).toMinutes();
-                    }
-                    return 0;
-                })
-                .sum();
+        long totalSeconds = records.stream().mapToLong(FocusRecord::getDurationSeconds).sum();
 
-        List<HistoryResponse.SessionEntry> entries = allSessions.stream()
-                .sorted((a, b) -> b.getJoinTime().compareTo(a.getJoinTime()))
-                .map(p -> {
-                    long seconds = p.isCompleted() ?
-                            (p.getRoom() != null ? p.getRoom().getDefaultDuration() * 60L : 25 * 60L) :
-                            (p.getJoinTime() != null && p.getLeaveTime() != null ?
-                                    java.time.Duration.between(p.getJoinTime(), p.getLeaveTime()).getSeconds() : 0);
-
-                    long mins = seconds / 60;
-                    String durationStr = mins > 0 ? mins + " min" : seconds + " sec";
+        List<HistoryResponse.SessionEntry> entries = records.stream()
+                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .map(r -> {
+                    int mins = r.getDurationSeconds() / 60;
+                    String durationStr = mins > 0 ? mins + " min" : r.getDurationSeconds() + " sec";
 
                     return HistoryResponse.SessionEntry.builder()
-                            .id(p.getId())
-                            .title((p.getRoom() != null ? p.getRoom().getName() : "Solo Focus") + (p.isCompleted() ? "" : " (Canceled)"))
+                            .id(r.getId())
+                            .title(r.getMode() == FocusRecord.Mode.ROOM ? "Room Focus" : "Solo Focus")
                             .duration(durationStr)
-                            .participants(p.getRoom() != null ? p.getRoom().getCurrentParticipants() : 1)
-                            .date(p.getJoinTime().format(DateTimeFormatter.ofPattern("MMM dd, yyyy")))
+                            .participants(r.getMode() == FocusRecord.Mode.ROOM ? 2 : 1) // Approx
+                            .date(formatDate(r.getCreatedAt()))
+                            .completed(r.isCompleted())
                             .build();
                 })
                 .collect(Collectors.toList());
 
         return HistoryResponse.builder()
                 .summary(HistoryResponse.Summary.builder()
-                        .totalFocus((totalMinutes / 60) + "h " + (totalMinutes % 60) + "m")
-                        .totalSessions(allSessions.size())
-                        .totalDays(1)
+                        .totalFocus((totalSeconds / 3600) + "h " + ((totalSeconds % 3600) / 60) + "m")
+                        .totalSessions(records.size())
+                        .totalDays(calculateActiveDays(records))
                         .build())
                 .sessions(entries)
                 .build();
+    }
+
+    private String formatDate(Instant instant) {
+        LocalDate date = instant.atZone(ZoneId.systemDefault()).toLocalDate();
+        LocalDate today = Instant.now().atZone(ZoneId.systemDefault()).toLocalDate();
+        if (date.equals(today)) return "Today";
+        if (date.equals(today.minusDays(1))) return "Yesterday";
+        return date.format(DateTimeFormatter.ofPattern("MMM dd, yyyy"));
+    }
+
+    @Override
+    @Transactional
+    public FocusRecord saveSoloRecord(String userId, int durationSeconds, boolean completed) {
+        double completionRate = completed ? 1.0 : (double) durationSeconds / (25 * 60);
+        completionRate = Math.min(1.0, completionRate);
+
+        FocusRecord record = FocusRecord.builder()
+                .userId(userId)
+                .mode(FocusRecord.Mode.SOLO)
+                .durationSeconds(durationSeconds)
+                .completed(completed)
+                .completionRate(completionRate)
+                .startedAt(Instant.now().minusSeconds(durationSeconds))
+                .endedAt(Instant.now())
+                .build();
+
+        return focusRecordRepository.save(record);
+    }
+
+    @Override
+    @Transactional
+    public FocusRecord saveRoomRecord(String userId, Long roomId, String sessionId, int durationSeconds, boolean completed) {
+        double completionRate = completed ? 1.0 : (double) durationSeconds / (25 * 60);
+        completionRate = Math.min(1.0, completionRate);
+
+        FocusRecord record = FocusRecord.builder()
+                .userId(userId)
+                .roomId(roomId)
+                .sessionId(sessionId)
+                .mode(FocusRecord.Mode.ROOM)
+                .durationSeconds(durationSeconds)
+                .completed(completed)
+                .completionRate(completionRate)
+                .startedAt(Instant.now().minusSeconds(durationSeconds))
+                .endedAt(Instant.now())
+                .build();
+
+        return focusRecordRepository.save(record);
     }
 }

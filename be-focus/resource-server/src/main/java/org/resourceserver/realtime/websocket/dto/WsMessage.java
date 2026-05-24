@@ -13,4 +13,8 @@ import org.resourceserver.common.response.AppEvent;
 public class WsMessage<T> {
     private AppEvent event;
     private T data;
+    private Long roomId;
+    private String userId;
+    private long timestamp;
+    private int version;
 }

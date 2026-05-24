@@ -95,6 +95,16 @@ $RECYCLE.BIN/
 # Spring Boot specific
 spring-boot-*.log
 
+# Docker compose (contains database passwords, secrets)
+docker-compose.yml
+
+# Any other environment/config files with secrets
+*.env
+*.env.local
+*.properties
+*.yml.local
+
+
 # ==============================================
 # Frontend Specific (Expo/React Native)
 # ==============================================

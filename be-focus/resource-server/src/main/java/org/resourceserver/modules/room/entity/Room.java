@@ -7,11 +7,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-import org.resourceserver.modules.session.entity.Session;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -24,27 +21,44 @@ public class Room {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(nullable = false)
     private String name;
-    private int maxParticipants;
-    private int currentParticipants;
-    private boolean isPublic;
+
+    @Column(nullable = false)
+    private String hostUserId;
 
     @Enumerated(EnumType.STRING)
-    private RoomStatus status;
+    @Column(nullable = false)
+    private Visibility visibility;
 
-    private int defaultDuration;
+    @Column(nullable = false)
+    private int defaultDurationSeconds;
 
-    @OneToMany(mappedBy = "room", cascade = CascadeType.ALL, orphanRemoval = true)
-    @Builder.Default
-    private List<Participant> participants = new ArrayList<>();
+    @Column(nullable = false)
+    private int maxParticipants;
 
-    @OneToOne(cascade = CascadeType.ALL)
-    @JoinColumn(name = "current_session_id")
-    private Session currentSession;
+    @Enumerated(EnumType.STRING)
+    @Column
+    private RoomType roomType = RoomType.NORMAL;
+
+    private String currentSessionId;
 
     @CreationTimestamp
-    private LocalDateTime createdAt;
+    @Column(updatable = false)
+    private Instant createdAt;
 
     @UpdateTimestamp
-    private LocalDateTime updatedAt;
+    private Instant updatedAt;
+
+    private Instant lastActivityAt;
+
+    public enum Visibility {
+        PUBLIC,
+        PRIVATE
+    }
+
+    public enum RoomType {
+        NORMAL,
+        CAMERA
+    }
 }
