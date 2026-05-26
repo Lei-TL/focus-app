@@ -116,6 +116,12 @@ public class RoomServiceImpl implements RoomService {
                 });
                 log.info("Adding user {} to room {} as MEMBER", userId, roomId);
                 roomMemberService.addMember(roomId, userId, RoomMember.Role.MEMBER);
+                
+                // If there's an active session, add this user as a participant
+                if (room.getCurrentSessionId() != null) {
+                    log.info("Adding user {} to active session {}", userId, room.getCurrentSessionId());
+                    sessionParticipantService.addParticipant(room.getCurrentSessionId(), userId);
+                }
             }
         );
 
